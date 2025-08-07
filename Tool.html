@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Receipt OCR App</title>
+  <link rel="icon" type="image/webp" href="invoice-icon.webp">
+  <style>
+    body {
+      background-color: #121212;
+      color: #ffffff;
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+    .hidden { display: none; }
+    .center { text-align: center; margin-top: 30px; }
+
+    input, button, select {
+      background-color: #1e1e1e;
+      color: #fff;
+      border: 1px solid #333;
+      padding: 5px 10px;
+      border-radius: 5px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+
+    th, td {
+      border: 1px solid #333;
+      padding: 8px;
+      text-align: center;
+    }
+
+    th {
+      background-color: #2c2c2c;
+    }
+
+    #calculator {
+      position: fixed;
+      top: 100px;
+      right: 20px;
+      background: #1e1e1e;
+      border: 1px solid #555;
+      padding: 10px;
+      display: none;
+    }
+
+    .actions {
+      margin: 20px;
+      text-align: center;
+    }
+
+    #message {
+      text-align: center;
+      margin-top: 10px;
+      color: lightgreen;
+    }
+  </style>
+</head>
+<body>
+
+<div id="loginPage">
+  <div class="center">
+    <h2>Login</h2>
+    <input type="email" id="email" placeholder="Enter your email" required><br><br>
+    <input type="password" id="password" placeholder="Enter your password"><br><br>
+    <button onclick="login()">Login</button>
+  </div>
+</div>
+
+<div id="homePage" class="hidden">
+  <div class="center">
+    <h2>Receipt Item Scanner</h2>
+    <input type="file" id="imageInput">
+    <button onclick="scanImage()">Scan Image</button>
+    <button onclick="toggleCalculator()">Calculator</button>
+    <div class="actions">
+      <button onclick="saveFile()">Save</button>
+      <button onclick="loadFile()">Load</button>
+      <button onclick="clearTable()">Clear</button>
+      <button onclick="logout()">Logout</button>
+    </div>
+    <div id="message"></div>
+    <table id="itemTable">
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Price</th>
+          <th>Quantity</th>
+          <th>Total</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<div id="calculator">
+  <input type="text" id="calcDisplay" readonly style="width:100%"><br><br>
+  <div>
+    <button onclick="calc('7')">7</button>
+    <button onclick="calc('8')">8</button>
+    <button onclick="calc('9')">9</button>
+    <button onclick="calc('+')">+</button><br>
+    <button onclick="calc('4')">4</button>
+    <button onclick="calc('5')">5</button>
+    <button onclick="calc('6')">6</button>
+    <button onclick="calc('-')">-</button><br>
+    <button onclick="calc('1')">1</button>
+    <button onclick="calc('2')">2</button>
+    <button onclick="calc('3')">3</button>
+    <button onclick="calc('*')">*</button><br>
+    <button onclick="calc('0')">0</button>
+    <button onclick="calc('/')">/</button>
+    <button onclick="solve()">=</button>
+    <button onclick="clearCalc()">C</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
+<script>
+  const loginPage = document.getElementById("loginPage");
+  const homePage = document.getElementById("homePage");
+  const emailInput = document.getElementById("email");
+  const passwordInput = document.getElementById("password");
+  const tableBody = document.querySelector("#itemTable tbody");
+  const message = document.getElementById("message");
+  const calcDisplay = document.getElementById("calcDisplay");
+
+  // Function to display the home page
+  function showHomePage() {
+    loginPage.classList.add("hidden");
+    homePage.classList.remove("hidden");
+    createRows(10); // Initialize table rows
+  }
+
+  // Function to display the login page
+  function showLoginPage() {
+    loginPage.classList.remove("hidden");
+    homePage.classList.add("hidden");
+    // Optionally clear input fields on logout
+    emailInput.value = '';
+    passwordInput.value = '';
+  }
+
+  // Check login status on page load (Immediately Invoked Function Expression)
+  (function checkLoginStatus() {
+    const isLoggedIn = localStorage.getItem('isLoggedIn');
+    if (isLoggedIn === 'true') {
+      showHomePage();
+    } else {
+      showLoginPage();
+    }
+  })();
+
+  function login() {
+    const email = emailInput.value;
+    // For demonstration, we're only checking email format.
+    // In a real application, you'd verify against a backend database.
+    if (email && email.includes("@") && email.includes(".")) {
+      localStorage.setItem('isLoggedIn', 'true'); // Store login state
+      showHomePage();
+    } else {
+      alert("Enter a valid email address.");
+    }
+  }
+
+  function logout() {
+    localStorage.removeItem('isLoggedIn'); // Remove login state
+    showLoginPage();
+    showMessage("Logged out successfully.");
+  }
+
+  function createRows(count) {
+    tableBody.innerHTML = '';
+    for (let i = 0; i < count; i++) {
+      const row = document.createElement("tr");
+      ["item", "price", "quantity"].forEach(type => {
+        const cell = document.createElement("td");
+        const input = document.createElement("input");
+        input.type = type === "price" || type === "quantity" ? "number" : "text";
+        input.oninput = calculateTotals;
+        cell.appendChild(input);
+        row.appendChild(cell);
+      });
+      const totalCell = document.createElement("td");
+      totalCell.innerText = "0";
+      row.appendChild(totalCell);
+      tableBody.appendChild(row);
+    }
+  }
+
+  function calculateTotals() {
+    [...tableBody.rows].forEach(row => {
+      const price = parseFloat(row.cells[1].querySelector("input").value) || 0;
+      const quantity = parseFloat(row.cells[2].querySelector("input").value) || 0;
+      row.cells[3].innerText = (price * quantity).toFixed(2);
+    });
+  }
+
+  // showMessage to optionally clear after a duration
+  function showMessage(msg, duration = 2000) {
+    message.innerText = msg;
+    if (duration > 0) {
+      setTimeout(() => message.innerText = '', duration);
+    }
+  }
+
+  function saveFile() {
+    const data = [];
+    [...tableBody.rows].forEach(row => {
+      const item = row.cells[0].querySelector("input").value;
+      const price = row.cells[1].querySelector("input").value;
+      const quantity = row.cells[2].querySelector("input").value;
+      data.push({ item, price, quantity });
+    });
+    const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+    const a = document.createElement("a");
+    const filename = prompt("Enter file name to save as:");
+    if (!filename) return;
+    a.href = URL.createObjectURL(blob);
+    a.download = filename + ".json";
+    a.click();
+    showMessage("Saved");
+  }
+
+  function loadFile() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.onchange = e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        const data = JSON.parse(evt.target.result);
+        createRows(data.length);
+        data.forEach((item, i) => {
+          const row = tableBody.rows[i];
+          row.cells[0].querySelector("input").value = item.item;
+          row.cells[1].querySelector("input").value = item.price;
+          row.cells[2].querySelector("input").value = item.quantity;
+        });
+        calculateTotals();
+        showMessage("Loaded");
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  }
+
+  function clearTable() {
+    [...tableBody.rows].forEach(row => {
+      row.cells[0].querySelector("input").value = "";
+      row.cells[1].querySelector("input").value = "";
+      row.cells[2].querySelector("input").value = "";
+      row.cells[3].innerText = "0";
+    });
+    showMessage("Cleared");
+  }
+
+  // Modified scanImage function to show "SCANNING..."
+  async function scanImage() {
+    const file = document.getElementById("imageInput").files[0];
+    if (!file) {
+      showMessage("No image selected");
+      return;
+    }
+
+    showMessage("SCANNING...", 0); // Display "SCANNING..." indefinitely (duration 0)
+
+    try {
+      const result = await Tesseract.recognize(file, 'eng');
+      const lines = result.data.text.split('\n').map(l => l.trim()).filter(Boolean);
+      let rowIndex = 0;
+      lines.forEach(line => {
+        const match = line.match(/^(.+?)\s+(\d+(\.\d+)?)$/);
+        if (match && rowIndex < tableBody.rows.length) {
+          const item = match[1];
+          const price = match[2];
+          const quantity = "1";
+          tableBody.rows[rowIndex].cells[0].querySelector("input").value = item;
+          tableBody.rows[rowIndex].cells[1].querySelector("input").value = price;
+          tableBody.rows[rowIndex].cells[2].querySelector("input").value = quantity;
+          rowIndex++;
+        }
+      });
+      calculateTotals();
+      showMessage("Scan complete", 2000); // Display "Scan complete" for 2 seconds
+    } catch (error) {
+      console.error("OCR Error:", error);
+      showMessage("Scan failed. Try again.", 3000); // Display error message for 3 seconds
+    }
+  }
+
+  function toggleCalculator() {
+    const calc = document.getElementById("calculator");
+    calc.style.display = calc.style.display === "none" ? "block" : "none";
+  }
+
+  function calc(val) {
+    calcDisplay.value += val;
+  }
+
+  function solve() {
+    try {
+      calcDisplay.value = eval(calcDisplay.value);
+    } catch {
+      calcDisplay.value = "Error";
+    }
+  }
+
+  function clearCalc() {
+    calcDisplay.value = '';
+  }
+</script>
+
+</body>
+</html>
